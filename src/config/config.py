@@ -16,6 +16,8 @@ VALID_DATA_FILE = "valid.txt"
 
 MODEL_NAME = "google-bert/bert-base-chinese"
 
+LABELS_FILE = "labels.txt"
+
 # 超参数
 LEARNING_RATE = 1e-5
 BATCH_SIZE = 64
