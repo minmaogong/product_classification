@@ -1,22 +1,28 @@
 # import sys
 # print(sys.path)
+import time
 from dataclasses import dataclass
 
 import torch
 from torch.optim import Adam
+from torch.utils.tensorboard import SummaryWriter
 
 from config.config import *
 from transformers import AutoTokenizer, DataCollatorWithPadding, AutoModelForSequenceClassification # DataCollatorWithPadding 带padding填充的数据整理器; AutoModelForSequenceClassification 带任务头的预训练模型，自带损失函数
 from process.dataset import get_dataset
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 # 定义训练配置类
 @dataclass
 class TrainConfig:
     epochs: int = EPOCHS
-    output_dir: str = MODEL_DIR
     batch_size: int = BATCH_SIZE
     learning_rate: float = LEARNING_RATE
+    save_steps: int = SAVE_STEPS
+
+    output_dir: str = MODEL_DIR
+    logs_dir: str = LOGS_DIR
 
 # 定义训练器
 class Trainer:
@@ -27,8 +33,15 @@ class Trainer:
         self.collator = collator
         self.device = device
         self.config = config
+
         # 优化器
         self.optimizer = Adam(model.parameters(), lr=config.learning_rate)
+        # Tensorboard写入器
+        self.writer = SummaryWriter(log_dir=str(Path(config.logs_dir / time.strftime("%Y%m%d-%H%M%S"))))
+
+        # 定义全局变量
+        self.steps = 0
+        self.min_loss = float('inf')
 
     # 定义内部方法：获取数据加载器
     def _get_dataloader(self):
@@ -43,11 +56,41 @@ class Trainer:
         )
         return dataloader
 
+    # 定义内部函数：训练一个批次(一步迭代)
+    def _train_one_step(self, inputs):
+        self.model.train()
+        inputs = { k:v.to(self.device) for k, v in inputs.items()}
+        # 前向传播
+        outputs = self.model(**inputs)
+        # 反向传播
+        outputs.loss.backward()
+        # 更新参数
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return outputs.loss.item()
+
+
     # 核心方法
     def train(self):
+        # 获取数据加载器
         dataloader = self._get_dataloader()
-
-
+        # 循环迭代
+        model = self.model
+        for epoch in range(self.config.epochs):
+            for inputs in tqdm(dataloader, desc=f"[训练：Epoch {epoch+1}]"):
+                # 调用一批数据的训练过程，得到损失
+                this_loss = self._train_one_step(inputs)
+                self.steps += 1
+                # 判断是否达到50次迭代，进行日志和模型保存
+                if self.steps % self.config.save_steps == 0:
+                    # 保存日志
+                    tqdm.write(f"[Epoch {epoch+1} | Step: {self.steps}] Loss: {this_loss:.4f}")
+                    self.writer.add_scalar('loss', this_loss, self.steps)
+                    # 判断是否保存模型
+                    if this_loss < self.min_loss:
+                        self.min_loss = this_loss
+                        tqdm.write("保存模型...")
+                        self.model.save_pretrained(self.config.output_dir)
 
 def train():
     print("开始训练 ...")
@@ -81,7 +124,14 @@ def train():
         train_dataset=train_dataset,
         collator=collator,
         device=device,
-        config=TrainConfig(epochs=EPOCHS, output_dir=MODEL_DIR)
+        config=TrainConfig(
+            epochs=EPOCHS,
+            batch_size=BATCH_SIZE,
+            learning_rate=LEARNING_RATE,
+            save_steps=SAVE_STEPS,
+            output_dir=MODEL_DIR,
+            logs_dir=LOGS_DIR,
+        )
     )
     # 5. 训练
     trainer.train()

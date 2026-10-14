@@ -23,3 +23,4 @@ LEARNING_RATE = 1e-5
 BATCH_SIZE = 64
 EPOCHS = 10
 
+SAVE_STEPS= 50 # 每50个批次查看一次损失，判断是否保存模型

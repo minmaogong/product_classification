@@ -3,3 +3,4 @@
 /data/processed
 /src/process/__pycache__
 /src/runner/__pycache__
+/models/model.safetensors
