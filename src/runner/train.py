@@ -25,6 +25,10 @@ class TrainConfig:
     output_dir: str = MODEL_DIR
     logs_dir: str = LOGS_DIR
 
+    # 定义早停参数
+    early_stop_patience: int = EARLY_STOP_PATIENCE # 早停的耐心值，连续多少次验证指标没有提升就停止训练
+    early_stop_metric: str = 'loss' # 早停的指标，默认使用验证集损失作为早停指标
+
 # 定义训练器
 class Trainer:
     # 初始化
@@ -44,7 +48,8 @@ class Trainer:
 
         # 定义全局变量
         self.steps = 0
-        self.min_loss = float('inf')
+        self.early_stop_best_score = -float('inf') # 如果评估指标是loss损失，那么应该越小越好，如果是准确率、精确率、召回率和f1评分，那么应该越大越好，所以这里初始化为负无穷
+        self.early_stop_counter = 0
 
     # 定义内部方法：获取数据加载器
     def _get_dataloader(self, dataset):
@@ -72,6 +77,27 @@ class Trainer:
         self.optimizer.zero_grad()
         return outputs.loss.item()
 
+    # 定义内部函数：判断是否早停，以及保存模型
+    def _should_early_stop(self, metrics) -> bool:
+        # 取出判定早停的指标
+        metrics = metrics[self.config.early_stop_metric]
+        # 转换成评分
+        score = -metrics if self.config.early_stop_metric == 'loss' else metrics # 如果是loss指标，score取负值，因为loss越小越好；如果是其他指标，score取原值，因为指标越大越好
+        # 如果评分超过历史最高，就保存模型
+        if score > self.early_stop_best_score: # early_stop_best_score 默认是负无穷，所以loss指标取负值，就能与其他分数指标统一判断条件
+            self.early_stop_best_score = score
+            self.early_stop_counter = 0 # 计数器清零
+            tqdm.write("保存模型...")
+            self.model.save_pretrained(self.config.output_dir)
+            return False
+        else:
+            # 如果评分降低，计数加1
+            self.early_stop_counter += 1
+            # 如果超过容忍度，就早停
+            if self.early_stop_counter >= self.config.early_stop_patience:
+                return True
+            else:
+                return False
 
     # 核心方法
     def train(self):
@@ -92,11 +118,17 @@ class Trainer:
                     metrics = self.evaluate() # 每训练完成50个批次，进行一次验证，返回指标字典
                     metrics_str = '|'.join([f'{k}:{v:.4f}' for k, v in metrics.items()])
                     tqdm.write(f'[Evaluate] {metrics_str}')
-                    # 判断是否保存模型
-                    if metrics['loss'] < self.min_loss:
-                        self.min_loss = metrics['loss']
-                        tqdm.write("保存模型...")
-                        self.model.save_pretrained(self.config.output_dir)
+
+                    # 早停逻辑
+                    if self._should_early_stop(metrics):
+                        tqdm.write("早停！")
+                        return
+
+                    # # 判断是否保存模型
+                    # if metrics['loss'] < self.min_loss:
+                    #     self.min_loss = metrics['loss']
+                    #     tqdm.write("保存模型...")
+                    #     self.model.save_pretrained(self.config.output_dir)
 
     # 验证评估方法，返回不同指标（字典）
     def evaluate(self) -> dict:
@@ -187,6 +219,8 @@ def train():
             save_steps=SAVE_STEPS,
             output_dir=MODEL_DIR,
             logs_dir=LOGS_DIR,
+            early_stop_patience=EARLY_STOP_PATIENCE,
+            early_stop_metric='loss',
         )
     )
     # 5. 训练

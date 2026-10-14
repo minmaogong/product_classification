@@ -24,3 +24,4 @@ BATCH_SIZE = 64
 EPOCHS = 10
 
 SAVE_STEPS= 50 # 每50个批次查看一次损失，判断是否保存模型
+EARLY_STOP_PATIENCE = 5 # 早停策略：如果验证集损失在连续5个评估周期内没有下降，则停止训练
