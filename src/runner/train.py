@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 
 import torch
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
@@ -27,10 +28,12 @@ class TrainConfig:
 # 定义训练器
 class Trainer:
     # 初始化
-    def __init__(self, model, train_dataset, collator, device, config=TrainConfig()):
+    def __init__(self, model, train_dataset, valid_dataset, collator, compute_metrics, device, config=TrainConfig()):
         self.model = model.to(device)
         self.train_dataset = train_dataset
+        self.valid_dataset = valid_dataset
         self.collator = collator
+        self.compute_metrics = compute_metrics
         self.device = device
         self.config = config
 
@@ -44,12 +47,12 @@ class Trainer:
         self.min_loss = float('inf')
 
     # 定义内部方法：获取数据加载器
-    def _get_dataloader(self):
+    def _get_dataloader(self, dataset):
         # 设置Tensor格式
-        self.train_dataset.set_format(type='torch')
+        dataset.set_format(type='torch')
         # 定义数据加载器
         dataloader = DataLoader(
-            self.train_dataset,
+            dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=self.collator
@@ -73,24 +76,61 @@ class Trainer:
     # 核心方法
     def train(self):
         # 获取数据加载器
-        dataloader = self._get_dataloader()
+        dataloader = self._get_dataloader(self.train_dataset)
         # 循环迭代
-        model = self.model
         for epoch in range(self.config.epochs):
             for inputs in tqdm(dataloader, desc=f"[训练：Epoch {epoch+1}]"):
                 # 调用一批数据的训练过程，得到损失
                 this_loss = self._train_one_step(inputs)
                 self.steps += 1
-                # 判断是否达到50次迭代，进行日志和模型保存
+                # 判断是否达到50次迭代，做验证，进行日志和模型保存
                 if self.steps % self.config.save_steps == 0:
                     # 保存日志
                     tqdm.write(f"[Epoch {epoch+1} | Step: {self.steps}] Loss: {this_loss:.4f}")
                     self.writer.add_scalar('loss', this_loss, self.steps)
+                    # 进行验证，得到评估指标
+                    metrics = self.evaluate() # 每训练完成50个批次，进行一次验证，返回指标字典
+                    metrics_str = '|'.join([f'{k}:{v:.4f}' for k, v in metrics.items()])
+                    tqdm.write(f'[Evaluate] {metrics_str}')
                     # 判断是否保存模型
-                    if this_loss < self.min_loss:
-                        self.min_loss = this_loss
+                    if metrics['loss'] < self.min_loss:
+                        self.min_loss = metrics['loss']
                         tqdm.write("保存模型...")
                         self.model.save_pretrained(self.config.output_dir)
+
+    # 验证评估方法，返回不同指标（字典）
+    def evaluate(self) -> dict:
+        # 获取验证数据加载器
+        dataloader = self._get_dataloader(self.valid_dataset)
+        self.model.eval()
+        # 记录总损失，用于计算指标1 - 验证集平均损失
+        total_loss = 0.0
+        # 记录所有数据的预测标签和真实标签，用于计算其他指标（准确率，精确率，召回率，f1...）
+        predictions = []
+        targets = []
+        # 遍历验证集
+        with torch.no_grad():
+            for inputs in tqdm(dataloader, desc=f"[验证]"):
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                # 前向传播
+                outputs = self.model(**inputs)
+                # 获取损失
+                loss = outputs.loss.item()
+                total_loss += loss
+                # 添加预测结果到列表
+                this_predictions = torch.argmax(outputs.logits, dim=-1) # outputs.logits返回的是num_labels个类别的概率分布组成的二维张量，形状为(batch_size, num_labels)，通过argmax获取概率最大的类别索引
+                predictions.extend(this_predictions.tolist())
+                # 添加真实标签到列表
+                this_labels = inputs["labels"]
+                targets.extend(this_labels.tolist())
+        # 计算评估指标
+        # 指标1: 平均损失
+        loss = total_loss / len(dataloader)
+        # 指标2: 其他指标，调用外部传入的计算函数，返回字典
+        metrics = self.compute_metrics(predictions, targets)
+
+        return {'loss': loss, **metrics} # **metrics 解包成字典
+
 
 def train():
     print("开始训练 ...")
@@ -114,15 +154,31 @@ def train():
     # 4. 定义训练器
     # 获取训练数据集
     train_dataset = get_dataset(ds_type='train')
+    # 获取验证数据集
+    valid_dataset = get_dataset(ds_type='valid')
     # 定义数据整理器
     collator = DataCollatorWithPadding(
         tokenizer=tokenizer,
         padding=True, # 等价于 padding='longest'：按批次内最长序列动态填充
     )
+    # 定义计算评估指标的函数
+    def compute_metrics(predictions, targets) -> dict:
+        accuracy = accuracy_score(targets, predictions) # 计算准确率
+        precision = precision_score(targets, predictions, average='weighted') # 计算精确率，average='weighted'表示对每个类别的精确率进行加权平均，权重为每个类别的样本数
+        recall = recall_score(targets, predictions, average='weighted') # 计算召回率
+        f1 = f1_score(targets, predictions, average='weighted') # 计算F1分数
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1
+        }
     trainer = Trainer(
         model=model,
         train_dataset=train_dataset,
+        valid_dataset=valid_dataset,
         collator=collator,
+        compute_metrics=compute_metrics,
         device=device,
         config=TrainConfig(
             epochs=EPOCHS,
