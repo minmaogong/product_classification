@@ -29,6 +29,9 @@ class TrainConfig:
     early_stop_patience: int = EARLY_STOP_PATIENCE # 早停的耐心值，连续多少次验证指标没有提升就停止训练
     early_stop_metric: str = 'loss' # 早停的指标，默认使用验证集损失作为早停指标
 
+    # 定义是否开启AMP功能（自动混合精度）
+    use_amp: bool = True
+
 # 定义训练器
 class Trainer:
     # 初始化
@@ -51,6 +54,9 @@ class Trainer:
         self.early_stop_best_score = -float('inf') # 如果评估指标是loss损失，那么应该越小越好，如果是准确率、精确率、召回率和f1评分，那么应该越大越好，所以这里初始化为负无穷
         self.early_stop_counter = 0
 
+        # AMP梯度缩放器
+        self.gradS_scaler = torch.amp.GradScaler(device=device, enabled=config.use_amp)
+
     # 定义内部方法：获取数据加载器
     def _get_dataloader(self, dataset):
         # 设置Tensor格式
@@ -68,12 +74,21 @@ class Trainer:
     def _train_one_step(self, inputs):
         self.model.train()
         inputs = { k:v.to(self.device) for k, v in inputs.items()}
-        # 前向传播
-        outputs = self.model(**inputs)
+        # 在 autocast 上下文中执行前向传播. 作用是自动混合精度训练，减少显存占用和加速训练。dtype=torch.float16 表示使用半精度浮点数进行计算
+        with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.config.use_amp):
+            outputs = self.model(**inputs)
         # 反向传播
-        outputs.loss.backward()
+        # 在调用 backward() 前退出 autocast 上下文
+        # 不推荐在 autocast 环境中执行反向传播（backward）
+        # 反向传播时，相关操作会使用与前向传播时 autocast 所选择相同的 dtype
+        self.gradS_scaler.scale(outputs.loss).backward() # 放大 loss，调用 backward() 时对 loss 进行放大，生成放大后的梯度，防止梯度下溢
         # 更新参数
-        self.optimizer.step()
+        # scaler.step() 会先对优化器中参数的梯度进行反缩放（恢复正常范围）
+        # 如果梯度中不包含 inf 或 NaN，才会执行 optimizer.step() 更新参数
+        # 如果包含 inf 或 NaN，optimizer.step() 会被跳过，避免错误更新
+        self. gradS_scaler.step(optimizer=self.optimizer)
+        # 更新 scaler 的缩放因子，供下一次迭代使用，自动动态调整 scale 保证稳定性
+        self. gradS_scaler.update()
         self.optimizer.zero_grad()
         return outputs.loss.item()
 
@@ -221,6 +236,7 @@ def train():
             logs_dir=LOGS_DIR,
             early_stop_patience=EARLY_STOP_PATIENCE,
             early_stop_metric='loss',
+            use_amp=True
         )
     )
     # 5. 训练
