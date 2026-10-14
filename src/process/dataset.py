@@ -7,13 +7,13 @@ def get_dataset(ds_type):
     # 加载数据集
     path = str(PROCESSED_DATA_DIR / ds_type)
     dataset = load_from_disk(path)
-
-    # 设置Tensor格式
-    dataset.set_format(type='torch')
     return dataset
 
 def get_dataloader(tokenizer, ds_type='train'):
     dataset = get_dataset(ds_type)
+
+    # 设置Tensor格式
+    dataset.set_format(type='torch')
 
     # 定义数据整理器
     collator = DataCollatorWithPadding(

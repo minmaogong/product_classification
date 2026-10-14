@@ -6,28 +6,46 @@ import torch
 from torch.optim import Adam
 
 from config.config import *
-from transformers import AutoTokenizer, AutoModelForSequenceClassification # 带任务头的预训练模型，自带损失函数
-from process.dataset import get_dataloader
+from transformers import AutoTokenizer, DataCollatorWithPadding, AutoModelForSequenceClassification # DataCollatorWithPadding 带padding填充的数据整理器; AutoModelForSequenceClassification 带任务头的预训练模型，自带损失函数
+from process.dataset import get_dataset
+from torch.utils.data import DataLoader
 
 # 定义训练配置类
 @dataclass
 class TrainConfig:
     epochs: int = EPOCHS
     output_dir: str = MODEL_DIR
+    batch_size: int = BATCH_SIZE
+    learning_rate: float = LEARNING_RATE
 
 # 定义训练器
 class Trainer:
     # 初始化
-    def __init__(self, model, train_loader, optimizer, device, config=TrainConfig()):
-        self.model = model
-        self.train_loader = train_loader
-        self.optimizer = optimizer
+    def __init__(self, model, train_dataset, collator, device, config=TrainConfig()):
+        self.model = model.to(device)
+        self.train_dataset = train_dataset
+        self.collator = collator
         self.device = device
         self.config = config
+        # 优化器
+        self.optimizer = Adam(model.parameters(), lr=config.learning_rate)
+
+    # 定义内部方法：获取数据加载器
+    def _get_dataloader(self):
+        # 设置Tensor格式
+        self.train_dataset.set_format(type='torch')
+        # 定义数据加载器
+        dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=True,
+            collate_fn=self.collator
+        )
+        return dataloader
 
     # 核心方法
     def train(self):
-        pass
+        dataloader = self._get_dataloader()
 
 
 
@@ -50,21 +68,22 @@ def train():
         label2id= { label:id for id, label in enumerate(all_labels) }
     ).to(device)
 
-    # 4. 定义优化器
-    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
-
-    # 5. 数据加载器
-    train_loader = get_dataloader(tokenizer, ds_type="train")
-
-    # 6. 定义训练器
+    # 4. 定义训练器
+    # 获取训练数据集
+    train_dataset = get_dataset(ds_type='train')
+    # 定义数据整理器
+    collator = DataCollatorWithPadding(
+        tokenizer=tokenizer,
+        padding=True, # 等价于 padding='longest'：按批次内最长序列动态填充
+    )
     trainer = Trainer(
         model=model,
-        train_loader=train_loader,
-        optimizer=optimizer,
+        train_dataset=train_dataset,
+        collator=collator,
         device=device,
         config=TrainConfig(epochs=EPOCHS, output_dir=MODEL_DIR)
     )
-    # 7. 训练
+    # 5. 训练
     trainer.train()
 
 if __name__ == "__main__":
