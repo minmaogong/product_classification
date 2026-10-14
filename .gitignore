@@ -1,2 +1,5 @@
 /.idea
 /src/config/__pycache__
+/data/processed
+/src/process/__pycache__
+/src/runner/__pycache__

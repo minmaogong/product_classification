@@ -24,9 +24,8 @@ def preprocess():
     # 3.2 将标签列表保存成文件
     with open(MODEL_DIR/LABELS_FILE, 'w', encoding='utf-8') as f:
         f.write("\n".join(all_labels))
-    # 3.3 将label列转成ClassLabel
-    class_label = ClassLabel(names=all_labels)
-    dataset_dict = dataset_dict.cast_column('label', class_label) # 将label列转成ClassLabel
+    # 3.3 将label列编码为ClassLabel：自动收集所有split的唯一标签，排序后映射成整数索引
+    dataset_dict = dataset_dict.class_encode_column(column='label')
 
     # 4. 编码文本（商品标题），得到模型输入
     def batch_encode(batch):
