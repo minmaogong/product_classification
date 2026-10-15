@@ -57,6 +57,9 @@ class Trainer:
         # AMP梯度缩放器
         self.gradS_scaler = torch.amp.GradScaler(device=device, enabled=config.use_amp)
 
+        # 检查点路径
+        self.checkpoint_path = Path(config.output_dir) / "last" / "checkpoint.pt"
+
     # 定义内部方法：获取数据加载器
     def _get_dataloader(self, dataset):
         # 设置Tensor格式
@@ -103,7 +106,7 @@ class Trainer:
             self.early_stop_best_score = score
             self.early_stop_counter = 0 # 计数器清零
             tqdm.write("保存模型...")
-            self.model.save_pretrained(self.config.output_dir)
+            self.model.save_pretrained(Path(self.config.output_dir) / "best")
             return False
         else:
             # 如果评分降低，计数加1
@@ -114,8 +117,44 @@ class Trainer:
             else:
                 return False
 
+    # 定义内部函数：保存检查点
+    def _save_checkpoint(self):
+        # 定义检查点，字典
+        checkpoint = {
+            'model': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'scaler': self.gradS_scaler.state_dict(),
+            'steps': self.steps,
+            'early_stop_best_score': self.early_stop_best_score,
+            'early_stop_counter': self.early_stop_counter
+        }
+
+        # 保存成文件
+        tqdm.write("保存检查点...")
+        torch.save(checkpoint, self.checkpoint_path)
+
+    # 定义内部函数：加载检查点
+    def _load_checkpoint(self):
+        # 判断检查点是否存在
+        if self.checkpoint_path.exists():
+            print(f"发现检查点，继续训练...")
+            # 获取检查点
+            checkpoint = torch.load(self.checkpoint_path)
+            # 加载所有状态
+            self.model.load_state_dict(checkpoint['model'])
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            self.gradS_scaler.load_state_dict(checkpoint['scaler'])
+            self.steps = checkpoint['steps']
+            self.early_stop_best_score = checkpoint['early_stop_best_score']
+            self.early_stop_counter = checkpoint['early_stop_counter']
+        else:
+            print(f"未发现检查点，开始新训练...")
+
     # 核心方法
     def train(self):
+        # 加载检查点
+        self._load_checkpoint()
+
         # 获取数据加载器
         dataloader = self._get_dataloader(self.train_dataset)
         # 循环迭代
@@ -138,6 +177,9 @@ class Trainer:
                     if self._should_early_stop(metrics):
                         tqdm.write("早停！")
                         return
+
+                    # 定期保存检查点
+                    self._save_checkpoint()
 
                     # # 判断是否保存模型
                     # if metrics['loss'] < self.min_loss:

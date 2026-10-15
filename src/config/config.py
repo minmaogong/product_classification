@@ -6,7 +6,7 @@ DATA_DIR = ROOT_DIR / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
-MODEL_DIR = ROOT_DIR / "models"
+MODEL_DIR = ROOT_DIR / "checkpoints"
 LOGS_DIR = ROOT_DIR / "logs"
 
 # 文件
