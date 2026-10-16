@@ -8,3 +8,4 @@
 /logs
 /data/raw/.accelerate
 /test/__pycache__
+/src/web/__pycache__
