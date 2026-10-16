@@ -7,3 +7,4 @@
 /checkpoints/last
 /logs
 /data/raw/.accelerate
+/test/__pycache__
